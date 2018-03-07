@@ -1,0 +1,228 @@
+---
+title: "Quolls microbiome analysis"
+author: "Cath Burke"
+date: "18 January 2018"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
+```{r, load packages}
+library("phyloseq")
+library("ape")
+library("ggplot2")
+library("vegan")
+library("reshape2")
+library("tidyverse")
+library("cowplot")
+library("zoo")
+```
+
+```{r import data to phyloseq}
+merged_biom<-"data/otu_table_mc2_w_tax_no_pynast_failures_json.biom"
+map<-sample_data(read.table("data/map_merged.txt",header=TRUE, stringsAsFactors=TRUE, sep="\t", row.names=1))
+tree<-read_tree("data/rep_set.tre")
+
+marsup<-import_biom(merged_biom, treefilename = tree, parseFunction = parse_taxonomy_default)
+
+marsup<-merge_phyloseq(marsup, map)
+colnames(tax_table(marsup)) = c("Domain", "Phylum", "Class", "Order", "Family", "Genus", "Species")
+```
+
+```{r data filtering}
+unassigned<-sample_data(marsup) %>% filter(grepl("unused",run_prefix)) 
+summary(unassigned$Counts_per_sample)
+#Highest is 6K seqs per unassigned barcode.
+
+assigned<-sample_data(marsup) %>% filter(!grepl("unused",run_prefix))
+summary(assigned$Counts_per_sample)
+
+negs<-assigned %>% filter(Type %in% c("field_neg","PCR_neg","negative","elution_neg"))
+summary(negs$Counts_per_sample)
+
+negs %>% arrange(desc(Counts_per_sample))
+
+samples<-assigned %>% filter(!(Type %in% c("field_neg","PCR_neg","negative","elution_neg")))
+summary(samples$Counts_per_sample)
+
+#Remove samples from contaminated PCR run
+contaminants<-c("QA047O","QA055O","QA036C","QA023O","QA047C","N7","N8","QA031O")
+marsups_data<-sample_data(marsup) %>% filter(!(run_prefix %in% contaminants))
+assigned<-marsups_data %>% filter(!grepl("unused",run_prefix))
+
+summary(assigned$Counts_per_sample)
+
+negs<-assigned %>% filter(Type %in% c("field_neg","PCR_neg","negative","elution_neg"))
+summary(negs$Counts_per_sample)
+
+negs %>% arrange(desc(Counts_per_sample))
+
+samples<-assigned %>% filter(!(Type %in% c("field_neg","PCR_neg","negative","elution_neg")))
+summary(samples$Counts_per_sample)
+
+marsup_1<-subset_samples(marsup,Type!="unassigned")
+marsup_1<-subset_samples(marsup_1, !(run_prefix %in% contaminants))
+marsup_1<-subset_samples(marsup_1, Type!="positive")
+
+#Now explore relationship of samples to negatives
+test1<-subset_samples(marsup_1, sample_sums(marsup_1)>1700)
+test1_ra<-transform_sample_counts(test1, function(x) x/sum(x))
+test1_ord<-ordinate(test1, method="PCoA", distance="wunifrac")
+sample_data(test1)$PCR.run<-as.factor(sample_data(test1)$PCR.run)
+#Palette of 22 distinct colours
+mycol = palette(c("#e6194b","#3cb44b","#ffe119","#0082c8","#f58231","#911eb4","#46f0f0","#f032e6","#d2f53c","#fabebe","#008080","#e6beff","#aa6e28","#fffac8","#800000","#aaffc3","#808000","#ffd8b1","#000080","#808080","#FFFFFF","#000000"))
+mycol = palette(c("#e6194b","#3cb44b","#ffe119","#0082c8","#f58231","#911eb4","#46f0f0","#f032e6","#d2f53c","#fabebe","#008080","#e6beff","#aa6e28","#fffac8","#800000","#aaffc3","#808000","#ffd8b1","#000080","#808080","#FFFFFF","#000000"))
+
+plot_ordination(test1, test1_ord, color="Type", shape="Pool", label="run_prefix")+scale_color_manual(values=mycol)
+
+#Rarefy to at least 2x higest neg.
+marsup_rare<-rarefy_even_depth(marsup_1, 25572, rngseed=711, replace=FALSE)
+marsup_rare_rel<-transform_sample_counts(marsup_rare,function(x) x/sum(x))
+```
+
+```{r, Alpha diversity}
+plot_richness(marsup_rare, x="Type", color="sub_type", measures="Observed")+labs(y="Observed OTUs")
+plot_richness(marsup_rare, x="Type", color="sub_type", measures=c("Shannon"))+labs(y="Shannon Diversity")
+
+
+plot_richness(marsup_rare, x="Type", color="sub_type", measures=c("Shannon"))+labs(y="Shannon Diversity")+facet_grid(Type~swab_site, scales="free")
+
+alpha_all<-estimate_richness(marsup_rare, measures=c("Shannon","Observed","Chao1"))
+
+alpha_all<-cbind(alpha_all, sample_data(marsup_rare))
+
+alpha_all %>% filter(Type=="quoll"&swab_site=="C") %>%
+  ggplot(aes(x=sex, y=Shannon))+geom_boxplot()+
+  geom_point()+labs(title="Alpha diversity of quoll cloaca")
+
+
+
+```
+
+```{r, Beta-diversity}
+marsup_ord<-ordinate(marsup_rare, method="PCoA", distance="wunifrac")
+plot_ordination(marsup_rare, marsup_ord, color="Type", shape="Pool")+scale_color_manual(values=mycol)
+
+plot_ordination(marsup_rare, marsup_ord, color="Chlamydiales_positivity", shape="Type")+scale_color_manual(values=mycol)
+
+dist<-distance(marsup_rare,method="wunifrac")
+
+adonis(dist~Type+Chlamydiales_positivity + Seq_run + Pool+swab_site, data.frame(sample_data(marsup_rare)))
+
+#Subset to quolls only and check for association of chlamydiales positivity
+quolls_rare<-subset_samples(marsup_rare, Type=="quoll")
+dist_quolls<-distance(quolls_rare, "wunifrac")
+quolls_ord<-ordinate(quolls_rare, method="PCoA", distance="wunifrac")
+plot_ordination(quolls_rare, quolls_ord, color="swab_site", shape="Chlamydiales_positivity")+scale_color_manual(values=mycol)
+
+
+adonis(dist_quolls~swab_site + Chlamydiales_positivity + Pool+Site, data.frame(sample_data(quolls_rare)))
+
+```
+
+```{r, taxa summaries}
+mar_smelt_rel<-psmelt(marsup_rare_rel)
+mar_smelt_rare<-psmelt(marsup_rare)
+mar_smelt_rare<-mar_smelt_rare %>% group_by(run_prefix) %>%
+  mutate(rel_abund=Abundance/sum(Abundance))
+phyla_plot<-mar_smelt_rare %>% group_by(Phylum) %>%
+  mutate(tot_phy=sum(Abundance)) %>% ungroup() %>%
+  filter(tot_phy/sum(Abundance) > 0.001)
+  
+(quoll_phyla<-phyla_plot %>% filter(Type=="quoll") %>%
+  ggplot(aes(x=run_prefix, y=rel_abund, fill=Phylum))+ geom_bar(stat="identity")+
+  facet_grid(.~swab_site, scale="free", space="free")+
+    labs(x="Samples",y="Relative abundance")+
+    theme(axis.text.x = element_text(angle = 90, hjust = 1)))
+
+(marsup_other_phyla<-phyla_plot %>% filter(Type!="quoll") %>%
+  ggplot(aes(x=run_prefix, y=rel_abund, fill=Phylum))+ geom_bar(stat="identity")+
+  facet_grid(.~Type, scale="free", space="free")+
+    labs(x="Samples",y="Relative abundance")+
+    theme(axis.text.x = element_text(angle = 90, hjust = 1)))
+
+plot_grid(quoll_phyla + theme(legend.position = "none"),
+          marsup_other_phyla +
+            theme(legend.text=element_text(size=8),legend.key.size=unit(0.5,"cm")),
+          labels=c("A","B"), nrow=2)
+
+ggplot(phyla_plot, aes(x=run_prefix,y=rel_abund,fill=Phylum))+geom_bar(stat="identity")+facet_grid(.~Type, scales="free", space="free")+labs(y="Relative abundance", x="Samples", title="Phyla Composition")
+
+genus_20<-mar_smelt_rare %>%
+  filter(!(is.na(Phylum))) %>%
+  group_by(Genus) %>%
+  mutate (genSum = sum(Abundance)) %>%
+  distinct(Genus, .keep_all=TRUE) %>%
+  ungroup() %>%
+  mutate (genProp = genSum/sum(genSum)) %>% 
+  top_n(20, genSum) %>%
+  select(Genus, genSum, genProp) %>% arrange(desc(genSum))
+
+(genus_filt<-mar_smelt_rare %>%
+  filter(!(is.na(Phylum))) %>%
+  group_by() %>%
+  mutate(rel_abund_whole=Abundance/sum(Abundance)) %>%
+  group_by(Genus) %>%
+  filter(sum(rel_abund_whole) > 0.01) %>%
+  group_by(Genus) %>%
+  distinct(Genus))
+
+(family_filt<-mar_smelt_rare %>%
+  filter(!(is.na(Phylum))) %>%
+  group_by() %>%
+  mutate(rel_abund_whole=Abundance/sum(Abundance)) %>%
+  group_by(Family) %>%
+  filter(sum(rel_abund_whole) > 0.01) %>%
+  group_by(Genus) %>%
+  filter(sum(rel_abund_whole) > 0.015) %>%
+  distinct(Family,Genus, .keep_all=TRUE)) %>%
+  select(Phylum,Family,Genus)
+
+genus_plot<-mar_smelt_rare %>% filter(Family %in% family_filt$Family & Genus %in% family_filt$Genus)
+
+ggplot(genus_plot, aes(x=run_prefix,y=rel_abund,fill=Genus))+geom_bar(stat="identity")+facet_grid(swab_site~Type, scales="free")+labs(y="Relative abundance", x="Samples", title="Genus Composition")
++scale_color_manual(values=mycol)
+
+marsup_genus<-genus_plot %>% filter(Type!="quoll")
+(marsup_plot<-ggplot(marsup_genus, aes(x=run_prefix, y=rel_abund, fill=Family))+
+  geom_bar(stat="identity")+
+  facet_grid(.~Type, scales="free")+
+  labs(y="Relative abundance", x="Samples")+
+  scale_fill_manual(values=mycol)+
+  theme(axis.text.x = element_text(angle = 90, hjust = 1), legend.text=element_text(size=8),legend.title=element_blank())+
+    guides(fill=guide_legend(ncol=2)))
+
+quolls_genus<-genus_plot %>% filter(Type=="quoll")
+
+ 
+
+(quolls_plot<-ggplot(quolls_genus,aes(x=run_prefix, y=rel_abund, fill=Family))+
+  geom_bar(stat="identity")+
+  facet_grid(.~swab_site, scales="free", space="free_x")+
+  labs(y="Relative abundance", x="Samples")+
+  scale_fill_manual(values=mycol)+
+  theme(axis.text.x = element_text(angle = 90, hjust = 1)))
+
+plot_grid(marsup_plot,quolls_plot+theme(legend.position = "none"), labels=c("A","B"), nrow=2)
+
+phyla_table<--mar_smelt_rare %>% filter(Type=="quoll") %>% ggplot(aes(x=run_prefix,y=))
+
+```
+
+```{r, explore unassigned taxa}
+#Get unassigned taxa OTU numbers
+unassigned<-data.frame(tax_table(marsup_rare)) %>% mutate(OTU=row.names(tax_table(marsup_rare))) %>% filter(is.na(Phylum)|Phylum=="p__")
+write.table(unassigned$OTU, file="unassigned_otus.txt", sep="\t")
+#How much data do they account for?
+sort(colSums(otu_table(marsup_rare)[unassigned$OTU,]), decreasing=TRUE)
+E5_un<-otu_table(marsup_rare)[unassigned$OTU,"E5"]
+E5_un[E5_un>10]
+(sort(taxa_sums(marsup_rare)[unassigned$OTU], decreasing=TRUE))/(sum(taxa_sums(marsup_rare)))
+
+
+
+```
+

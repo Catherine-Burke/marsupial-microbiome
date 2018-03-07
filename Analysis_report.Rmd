@@ -1,0 +1,167 @@
+---
+title: "Northern Quoll Microbiome"
+author: "Cath Burke"
+date: "7 March 2018"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE)
+```
+
+## Northern Quoll Cloaca and Ocular Microbiome
+
+Swab samples were collected from northern quolls (add species name) from the cloacal opening and occular cavity during field work in 2016.  16S rRNA libraries (V3-V4 region) were generated from DNA extracted from the swabs, and sequenced on an Illumina MiSeq using paired end sequencing.  
+
+Only one read of each read pair was used for analysis due to the low quality of read2, this read covered the V4 region.  
+
+Seperately, swab samples were collected from 3 spotted tail quolls, 7 possums, one wallaby, and two kangaroos. These swab samples were processed similarly to the above, with some differences in PCR conditions, and sequenced on a seperately Illumina MiSeq run.  Given the differences in sample preparation and the small number of samples, data from these samples is used for qualitative comparisons only.
+
+
+
+```{r, load packages and import data}
+library("phyloseq")
+library("ggplot2")
+library("reshape2")
+library("tidyverse")
+library("cowplot")
+library("ComplexHeatmap")
+library("circlize")
+merged_biom<-"data/otu_table_mc2_w_tax_no_pynast_failures_json.biom"
+map<-sample_data(read.table("data/map_merged.txt",header=TRUE, stringsAsFactors=TRUE, sep="\t", row.names=1))
+tree<-read_tree("data/rep_set.tre")
+
+marsup<-import_biom(merged_biom, treefilename = tree, parseFunction = parse_taxonomy_default)
+
+marsup<-merge_phyloseq(marsup, map)
+colnames(tax_table(marsup)) = c("Domain", "Phylum", "Class", "Order", "Family", "Genus", "Species")
+```
+
+```{r data filtering}
+unassigned<-sample_data(marsup) %>% filter(grepl("unused",sampleID)) 
+summary(unassigned$Counts_per_sample)
+#Highest is 6K seqs per unassigned barcode.
+
+assigned<-sample_data(marsup) %>% filter(!grepl("unused",sampleID))
+summary(assigned$Counts_per_sample)
+
+negs<-assigned %>% filter(Type %in% c("field_neg","PCR_neg","negative","elution_neg"))
+summary(negs$Counts_per_sample)
+
+negs %>% arrange(desc(Counts_per_sample))
+
+samples<-assigned %>% filter(!(Type %in% c("field_neg","PCR_neg","negative","elution_neg")))
+summary(samples$Counts_per_sample)
+
+#Remove samples from contaminated PCR run
+contaminants<-c("QA047O","QA055O","QA036C","QA023O","QA047C","N7","N8","QA031O")
+marsups_data<-sample_data(marsup) %>% filter(!(sampleID %in% contaminants))
+assigned<-marsups_data %>% filter(!grepl("unused",sampleID))
+
+summary(assigned$Counts_per_sample)
+
+negs<-assigned %>% filter(Type %in% c("field_neg","PCR_neg","negative","elution_neg"))
+summary(negs$Counts_per_sample)
+
+negs %>% arrange(desc(Counts_per_sample))
+
+samples<-assigned %>% filter(!(Type %in% c("field_neg","PCR_neg","negative","elution_neg")))
+summary(samples$Counts_per_sample)
+
+marsup_1<-subset_samples(marsup,Type!="unassigned")
+marsup_1<-subset_samples(marsup_1, !(sampleID %in% contaminants))
+marsup_1<-subset_samples(marsup_1, Type!="positive")
+
+#Now explore relationship of samples to negatives
+test1<-subset_samples(marsup_1, sample_sums(marsup_1)>1700)
+test1_ra<-transform_sample_counts(test1, function(x) x/sum(x))
+test1_ord<-ordinate(test1, method="PCoA", distance="wunifrac")
+sample_data(test1)$PCR.run<-as.factor(sample_data(test1)$PCR.run)
+#Palette of 22 distinct colours
+mycol = palette(c("#e6194b","#3cb44b","#ffe119","#0082c8","#f58231","#911eb4","#46f0f0","#f032e6","#d2f53c","#fabebe","#008080","#e6beff","#aa6e28","#fffac8","#800000","#aaffc3","#808000","#ffd8b1","#000080","#808080","#FFFFFF","#000000"))
+mycol = palette(c("#e6194b","#3cb44b","#ffe119","#0082c8","#f58231","#911eb4","#46f0f0","#f032e6","#d2f53c","#fabebe","#008080","#e6beff","#aa6e28","#fffac8","#800000","#aaffc3","#808000","#ffd8b1","#000080","#808080","#FFFFFF","#000000"))
+
+plot_ordination(test1, test1_ord, color="Type", shape="Pool", label="run_prefix")+scale_color_manual(values=mycol)
+
+#Rarefy to at least 2x higest neg.
+marsup_rare<-rarefy_even_depth(marsup_1, 25572, rngseed=711, replace=FALSE)
+marsup_rare_rel<-transform_sample_counts(marsup_rare,function(x) x/sum(x))
+```
+## Taxonomy summary
+
+Put some explanatory text
+
+```{r taxonomy, echo=FALSE}
+mar_smelt_rel<-psmelt(marsup_rare_rel)
+mar_smelt_rare<-psmelt(marsup_rare)
+mar_smelt_rare<-mar_smelt_rare %>% group_by(sampleID) %>%
+  mutate(rel_abund=Abundance/sum(Abundance))
+phyla_plot<-mar_smelt_rare %>% filter(!(is.na(Phylum))|Phylum!="p__")%>%
+  group_by(Phylum) %>%
+  mutate(tot_phy=sum(Abundance)) %>% ungroup() %>%
+  filter(tot_phy/sum(Abundance) > 0.001)
+
+phyla_quolls<-phyla_plot %>% filter(Type=="quoll")
+phyla_quolls$swab_site<-factor(phyla_quolls$swab_site, levels=c("O","C"))
+phyla_quolls_names<-data.frame(phyla_quolls %>% group_by() %>%
+  distinct(sampleID, .keep_all=TRUE) %>% arrange(swab_site,sub_type,sampleID) %>%
+  select(sampleID,individual,sub_type,swab_site))%>%
+  mutate(individual=case_when(sampleID=="A8b2" ~ "A8b2", 
+                              sampleID=="D8"~"D8", 
+                              sampleID=="E2"~"E2", 
+                              TRUE~as.character(individual)))
+
+quoll_phyla<-ggplot(phyla_quolls, aes(x=sampleID, y=rel_abund, fill=Phylum))+geom_bar(stat="identity")+facet_grid(~swab_site+sub_type, scales="free", space="free") + theme(axis.text.x=element_text(angle=90))+scale_x_discrete(labels=phyla_quolls_names$individual)
+
+#Create a clustered heatmap
+#distance matrix
+js_d<-phyloseq::distance(marsup_rare_rel, method="jsd", TRUE)
+hc<-hclust(js_d, method="ward.D")
+#Create OTU table with top 50 OTUs
+top50<-names(sort(taxa_sums(marsup_rare), decreasing=TRUE)[1:50])
+otu_top50<-data.frame(otu_table(marsup_rare_rel)[top50,])
+top50names<-data.frame(tax_table(marsup_rare)[top50,]) %>% mutate(name=paste(Family,Genus,Species)) %>% mutate(name=gsub("[a-z]__","",name)) %>%
+  mutate(OTU=row.names(otu_top50))
+row.names(top50names)<-row.names(otu_top50)
+row.names(otu_top50)<-top50names$name
+#create data frame of annotation info
+an_info<-data.frame(sample_data(marsup_rare) %>% select(Type,sub_type,swab_site))
+ha<-HeatmapAnnotation(df=an_info, col=list(Type=c("quoll"="blue","wallaby"="red","rock rat"="orange", "possum"="green", "kangaroo"="pink","bandicoot"="yellow"), sub_type=c("swamp"="red","northern"="navy","spotted_tail"="cadetblue1","arnhem"="orange", "brushtail"="green", "ringtail"="olivedrab1", "short_eared"="lightgreen", "eastern_grey"="pink", "long_nosed"="yellow"), swab_site=c("O"="grey", "C"="black")), annotation_legend_param = list(title_gp = gpar(fontsize=8,fontface = "plain"),grid_height = unit(4, "mm"),
+    grid_width = unit(4, "mm"),labels_gp = gpar(fontsize = 8)))
+hm1<-Heatmap(otu_top50, col=colorRamp2(c(0,1),c("white","red")), cluster_columns = hc, show_row_dend=FALSE, row_names_side="left", heatmap_legend_param=list(color_bar="continuous", title=NULL, legend_direction = "vertical",labels_gp = gpar(fontsize = 8)), top_annotation=ha,  column_names_gp = gpar(fontsize = 8),row_names_gp = gpar(fontsize = 8),row_names_max_width = unit(5, "cm"), column_dend_reorder=FALSE)
+
+#Now on quolls only
+quoll_ps<-subset_samples(marsup_rare_rel, Type=="quoll" & sub_type=="northern")
+q_js_d<-phyloseq::distance(quoll_ps, method="jsd", TRUE)
+qhc<-hclust(q_js_d, method="ward.D")
+#top20
+top20q<-names(sort(taxa_sums(quoll_ps), decreasing=TRUE)[1:20])
+otu_top20q<-data.frame(otu_table(quoll_ps)[top20q,])
+top20namesq<-data.frame(tax_table(quoll_ps)[top20q,]) %>% mutate(name=paste(Family,Genus,Species)) %>% mutate(name=gsub("[a-z]__","",name)) %>%
+  mutate(OTU=row.names(otu_top20q)) %>%
+  group_by(name) %>%
+    mutate(name2 = if(n( ) > 1) {paste0(name, row_number( ))} 
+           else {paste0(name)})
+row.names(top20namesq)<-row.names(otu_top20q)
+row.names(otu_top20q)<-top20namesq$name2
+#top50
+top50q<-names(sort(taxa_sums(quoll_ps), decreasing=TRUE)[1:50])
+otu_top50q<-data.frame(otu_table(quoll_ps)[top50q,])
+top50namesq<-data.frame(tax_table(quoll_ps)[top50q,]) %>% mutate(name=paste(Family,Genus,Species)) %>% mutate(name=gsub("[a-z]__","",name)) %>%
+  mutate(OTU=row.names(otu_top50q)) %>%
+  group_by(name) %>%
+    mutate(name2 = if(n( ) > 1) {paste0(name, row_number( ))} 
+           else {paste0(name)})
+row.names(otu_top50q)<-top50namesq$name2
+#create data frame of annotation info
+an_infoq<-data.frame(sample_data(quoll_ps) %>% select(swab_site, Site))
+haq<-HeatmapAnnotation(df=an_infoq, 
+                      col=list(swab_site=c("O"="grey", "C"="navy"),
+                               Site=c("Astell Is"="magenta","Kakadu"="green")), annotation_legend_param = list(title_gp = gpar(fontsize=8,fontface = "plain"),grid_height = unit(4, "mm"),
+    grid_width = unit(4, "mm"),labels_gp = gpar(fontsize = 8)))
+hm2<-Heatmap(otu_top20q, col=colorRamp2(c(0,1),c("white","red")), cluster_columns = qhc, show_row_dend=FALSE, row_names_side="left", heatmap_legend_param=list(color_bar="continuous", title=NULL, legend_direction = "vertical",labels_gp = gpar(fontsize = 8)), top_annotation=haq,  column_names_gp = gpar(fontsize = 8),row_names_gp = gpar(fontsize = 8),row_names_max_width = unit(5, "cm"), column_dend_reorder=FALSE)
+
+
+```
+
+Note that the `echo = FALSE` parameter was added to the code chunk to prevent printing of the R code that generated the plot.
