@@ -221,8 +221,35 @@ sort(colSums(otu_table(marsup_rare)[unassigned$OTU,]), decreasing=TRUE)
 E5_un<-otu_table(marsup_rare)[unassigned$OTU,"E5"]
 E5_un[E5_un>10]
 (sort(taxa_sums(marsup_rare)[unassigned$OTU], decreasing=TRUE))/(sum(taxa_sums(marsup_rare)))
+un_more<-sort(taxa_sums(marsup_rare)[unassigned$OTU], decreasing=TRUE)
+un_more<-un_more[un_more>sum(sample_sums(marsup_rare))*0.00001]
+length(un_more)
+write.table(names(un_more),file="Data/unassigned_more_otus.txt",sep="\t")
 
+##retrieved rep seqs for OTUs using usearch
+#usearch10 fastx_getseqs rep_set.fna -labels ../unassigned_otus.txt -label_substing_match -fastaout unassignedotus.fasta 
+##Then blasted against the NCBI non-redundant nucleotide database
+#blastn -query unassignedotus.fasta -max_target_seqs 1 -remote -db "nt" -best_hit_overhang 0.1 -best_hit_score_edge 0.1 -outfmt 6 -out unassigned_blast.txt
+##Then get only unassigned OTUs that represent more than 0.001% of the total data
+#usearch10 -fastx_getseqs rep_set.fna -labels unassigned_more_otus.txt -label_substr_match -fastaout unassignedotus_more.fasta
 
+#Now check num OTUs with no genus assigned
+un_gen<-data.frame(tax_table(marsup_rare)) %>% mutate(OTU=row.names(tax_table(marsup_rare))) %>% filter(is.na(Genus)|Genus=="g__") %>% filter(!(is.na(Phylum))|Phylum!="p__")
+#Get abundances
+mar_smelt_rare %>% group_by() %>% mutate(total_abund=Abundance/sum(Abundance)) %>%
+  filter(sub_type=="northern") %>% filter(Genus=="g__") %>% distinct(OTU, .keep_all=TRUE) %>% filter(total_abund>0.001)
+#OTUs without genus level assignment present at > 1% in any one sample
+no_gen<-data.frame(mar_smelt_rare %>% group_by() %>% mutate(total_abund=Abundance/sum(Abundance)) %>%
+  filter(sub_type=="northern") %>% filter(Genus=="g__") %>%
+  filter(rel_abund>0.01) %>% distinct(OTU, .keep_all=TRUE) %>%
+    arrange(Class,Order,Family))
 
+data.frame(mar_smelt_rare %>% group_by() %>% mutate(total_abund=Abundance/sum(Abundance)) %>%
+  filter(sub_type=="northern") %>% filter(Genus=="g__") %>% group_by(sampleID) %>%
+  summarise(sam_sum=sum(rel_abund)) %>% arrange(desc(sam_sum)))
+
+data.frame(mar_smelt_rare %>% group_by() %>% mutate(total_abund=Abundance/sum(Abundance)) %>%
+  filter(sub_type=="northern") %>% filter(Family=="f__") %>% group_by(sampleID) %>%
+  summarise(sam_sum=sum(rel_abund)) %>% arrange(desc(sam_sum)))
 ```
 
