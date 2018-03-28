@@ -239,17 +239,45 @@ un_gen<-data.frame(tax_table(marsup_rare)) %>% mutate(OTU=row.names(tax_table(ma
 mar_smelt_rare %>% group_by() %>% mutate(total_abund=Abundance/sum(Abundance)) %>%
   filter(sub_type=="northern") %>% filter(Genus=="g__") %>% distinct(OTU, .keep_all=TRUE) %>% filter(total_abund>0.001)
 #OTUs without genus level assignment present at > 1% in any one sample
-no_gen<-data.frame(mar_smelt_rare %>% group_by() %>% mutate(total_abund=Abundance/sum(Abundance)) %>%
-  filter(sub_type=="northern") %>% filter(Genus=="g__") %>%
-  filter(rel_abund>0.01) %>% distinct(OTU, .keep_all=TRUE) %>%
-    arrange(Class,Order,Family))
+no_gen<-data.frame(mar_smelt_rare %>% group_by(OTU) %>%
+                     mutate(otu_abund=sum(Abundance)) %>%
+                     group_by() %>%
+                     mutate(total_otu_abund=otu_abund/sum(Abundance)) %>%
+                     filter(sub_type=="northern") %>% filter(Genus=="g__") %>%
+                     filter(rel_abund>0.01) %>% distinct(OTU, .keep_all=TRUE) %>%
+                     arrange(total_otu_abund))
+#otu sums for the 3 most abundant OTUs without genus assignment
+(taxa_sums(marsup_rare)[c("1111294","969149","844940")])/sum(taxa_sums(marsup_rare))
 
-data.frame(mar_smelt_rare %>% group_by() %>% mutate(total_abund=Abundance/sum(Abundance)) %>%
-  filter(sub_type=="northern") %>% filter(Genus=="g__") %>% group_by(sampleID) %>%
-  summarise(sam_sum=sum(rel_abund)) %>% arrange(desc(sam_sum)))
+otu_samp_sums<-otu_table(marsup_rare_rel)[c("1111294","969149","844940"),]
+for (i in 1:nrow(otu_samp_sums)) {
+  print(fivenum(data.frame(otu_samp_sums[i,])))
+}
+fivenum(otu_samp_sums)
+apply(otu_samp_sums,1,min)
+apply(otu_samp_sums,1,median)
+apply(otu_samp_sums,1,max)
 
-data.frame(mar_smelt_rare %>% group_by() %>% mutate(total_abund=Abundance/sum(Abundance)) %>%
-  filter(sub_type=="northern") %>% filter(Family=="f__") %>% group_by(sampleID) %>%
-  summarise(sam_sum=sum(rel_abund)) %>% arrange(desc(sam_sum)))
+#Get otu names of no genera
+otu_names<-no_gen$OTU
+write.table(otu_names,file="no_gen_names.txt", sep="\t", quote=FALSE, row.names=FALSE, col.names=FALSE)
+#Used mothur get.seqs.command to retrieve fasta file with representative seqs from each of these 25 OTUS.  Command and output below.
+#mothur > get.seqs(accnos=no_gen_names.txt, fasta=data/rep_set.fna)
+##Selected 25 sequences from your fasta file.
+##Output File Names: 
+##data/rep_set.pick.fna
+data.frame(mar_smelt_rare %>% group_by() %>%
+             mutate(total_abund=Abundance/sum(Abundance)) %>%
+             filter(sub_type=="northern") %>% filter(Genus=="g__") %>%
+             group_by(sampleID) %>%
+             summarise(sam_sum=sum(rel_abund)) %>% 
+             arrange(desc(sam_sum)))
+
+data.frame(mar_smelt_rare %>% 
+             group_by() %>% 
+             mutate(total_abund=Abundance/sum(Abundance)) %>%
+             filter(sub_type=="northern") %>% filter(Family=="f__") %>%
+             group_by(sampleID) %>%
+             summarise(sam_sum=sum(rel_abund)) %>% arrange(desc(sam_sum)))
 ```
 

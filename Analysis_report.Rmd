@@ -17,7 +17,10 @@ Only one read of each read pair was used for analysis due to the low quality of 
 
 Seperately, swab samples were collected from 3 spotted tail quolls, 7 possums, one wallaby, and two kangaroos. These swab samples were processed similarly to the above, with some differences in PCR conditions, and sequenced on a seperately Illumina MiSeq run.  Given the differences in sample preparation and the small number of samples, data from these samples is used for qualitative comparisons only.
 
+##Sequencing results
+PCR negative samples had coverage of 47 and 1753 sequences, while process and field negatives ranged between 7 and 12K sequences.  Samples with less than 25K sequences were removed, and all samples were rarefied to 25572 sequences for subsequent analyses. Of the northern quolls samples collected and processed (56 cloaca and 57 ocular),  34 samples had sequence coverage above 25K (27 cloaca and 7 ocular) from 31 individual quolls.  
 
+Sequence coverage for all other marsupial samples from the second sequencing run ranged from 2 to 841K, and 30 samples had coverage above 25K, which were included for downstream analyses.  These samples were also rarefied to 25572 sequences per sample.
 
 ```{r, load packages, include=FALSE }
 library("phyloseq")
@@ -30,14 +33,14 @@ library("ComplexHeatmap")
 library("circlize")
 ```
 ```{r, import data, cache=TRUE, include=FALSE}
-merged_biom<-"data/otu_table_mc2_w_tax_no_pynast_failures_json.biom"
+merged_biom<-"data/otu_table_silva_tax_json.biom"
 map<-sample_data(read.table("data/map_merged.txt",header=TRUE, stringsAsFactors=TRUE, sep="\t", row.names=1))
 tree<-read_tree("data/rep_set.tre")
 
 marsup<-import_biom(merged_biom, treefilename = tree, parseFunction = parse_taxonomy_default)
 
 marsup<-merge_phyloseq(marsup, map)
-colnames(tax_table(marsup)) = c("Domain", "Phylum", "Class", "Order", "Family", "Genus", "Species")
+colnames(tax_table(marsup)) = c("Domain", "Phylum", "Class", "Order", "Family", "Genus")
 ```
 
 ```{r data filtering, cache=TRUE, include=FALSE}
@@ -74,11 +77,7 @@ summary(samples$Counts_per_sample)
 marsup_1<-subset_samples(marsup,Type!="unassigned")
 marsup_1<-subset_samples(marsup_1, !(sampleID %in% contaminants))
 marsup_1<-subset_samples(marsup_1, Type!="positive")
-
-#Palette of 22 distinct colours
-mycol = palette(c("#e6194b","#3cb44b","#ffe119","#0082c8","#f58231","#911eb4","#46f0f0","#f032e6","#d2f53c","#fabebe","#008080","#e6beff","#aa6e28","#fffac8","#800000","#aaffc3","#808000","#ffd8b1","#000080","#808080","#FFFFFF","#000000"))
-mycol = palette(c("#e6194b","#3cb44b","#ffe119","#0082c8","#f58231","#911eb4","#46f0f0","#f032e6","#d2f53c","#fabebe","#008080","#e6beff","#aa6e28","#fffac8","#800000","#aaffc3","#808000","#ffd8b1","#000080","#808080","#FFFFFF","#000000"))
-
+marsup_1<-subset_samples(marsup_1, !(Type %in% c("field_neg","PCR_neg","negative","elution_neg")))
 #Filter out low abundance OTUs
 marsup_2<-filter_taxa(marsup_1, function(x) sum(x)> sum(sample_sums(marsup_1)*0.00001),TRUE)
 #Remove OTUs not classified as bacteria
@@ -86,6 +85,26 @@ marsup_3<-prune_taxa(rownames(tax_table(marsup_2)[tax_table(marsup_2)[,1]=="k__B
 #Rarefy to at least 2x higest neg.
 marsup_rare<-rarefy_even_depth(marsup_3, 25572, rngseed=711, replace=FALSE)
 marsup_rare_rel<-transform_sample_counts(marsup_rare,function(x) x/sum(x))
+#Sequence summary for negatives
+negs_data<-sample_data(marsup) %>% 
+  filter(Type %in% c("field_neg","PCR_neg","negative","elution_neg"))
+sample_sums(marsup)[as.character(negs_data$sampleID)]
+
+#Sequencing summary for northern quolls
+sample_data(marsup) %>% filter(sub_type=="northern") %>% select(swab_site) %>% table()
+sample_data(marsup_rare)[,c("sub_type","swab_site")] %>% table()
+sample_data(marsup_rare) %>% filter(sub_type=="northern") %>% distinct(individual)
+##Sequencing summary of other mammal samples
+other_names<-sample_data(marsup_1) %>% filter(sub_type!="northern")
+#Sequence coverage
+sort(sample_sums(marsup_1)[as.character(other_names$sampleID)])
+#Number of samples with > 25572 seqs
+length(sort(sample_sums(marsup_1)[as.character(other_names$sampleID)]) > 25572)
+#Palette of 22 distinct colours
+mycol = palette(c("#e6194b","#3cb44b","#ffe119","#0082c8","#f58231","#911eb4","#46f0f0","#f032e6","#d2f53c","#fabebe","#008080","#e6beff","#aa6e28","#fffac8","#800000","#aaffc3","#808000","#ffd8b1","#000080","#808080","#FFFFFF","#000000"))
+mycol = palette(c("#e6194b","#3cb44b","#ffe119","#0082c8","#f58231","#911eb4","#46f0f0","#f032e6","#d2f53c","#fabebe","#008080","#e6beff","#aa6e28","#fffac8","#800000","#aaffc3","#808000","#ffd8b1","#000080","#808080","#FFFFFF","#000000"))
+
+
 ```
 ## Taxonomy summary
 
@@ -147,8 +166,8 @@ name_change<-function(df){
     mutate(Order=ifelse(is.na(Order)|Order=="o__",as.character(Class),as.character(Order))) %>%
     mutate(Family=ifelse(is.na(Family)|Family=="f__",as.character(Order),as.character(Family))) %>%
     mutate(Genus=ifelse(is.na(Genus)|Genus=="g__",as.character(Family),as.character(Genus))) %>%
-    mutate(Species=ifelse(is.na(Species),"",as.character(Species)))%>%
-    mutate(name=paste(Family,Genus,Species)) %>% 
+    #mutate(Species=ifelse(is.na(Species),"",as.character(Species)))%>%
+    mutate(name=paste(Family,Genus)) %>% 
     mutate(name=gsub("[a-z]__","",name)) %>%
     mutate(OTU=row.names(df)) %>% group_by(name) %>%
     mutate(name2 = if(n( ) > 1) {paste0(name, row_number( ))} 
@@ -278,6 +297,32 @@ plot_ordination(quolls_rare, quolls_ord, color="swab_site", shape="Chlamydiales_
   labs(title="PCoA of weighted unifrac distances for quolls")+
   stat_ellipse(aes(group=sample_data(quolls_rare)[,"swab_site"]))
 adonis(dist_quolls~swab_site + Chlamydiales_positivity + sex, data.frame(sample_data(quolls_rare)))
+```
+##ANCOM differential abundance analysis
+Used the ANCOM method as implemented in Qiime2 to detect differentially abundant features between ocular and cloaca samples in quolls.  The OTU table was filtered to remove OTUs not present in at least 3 samples.  A pseudo-count of 1 was added to every entry in the OTU table, then the ANCOM proceedure applied.  Only one OTU was identified as significantly different, a Pseudomonas OTU which had a higher relative abundance in occular site.  The overall relative abudnance was low at <= 0.6%.
+```{r}
+sig_otus<-c("817209")
+sig_otus_data<-psmelt(quolls_rare) %>%
+  group_by(Sample) %>%
+  mutate(rel_abund=Abundance/sum(Abundance)*100) %>%
+  filter(OTU %in% sig_otus)
+
+```
+####Figure 6
+
+Normalised abundance of a *Pseudomonas* OTU found to be significantly different between ocular and cloaca sites in northern quolls
+
+```{r, figure 6}
+
+ggplot(sig_otus_data, aes(x=Sample,y=rel_abund))+
+  geom_bar(stat="identity") +
+  facet_grid(.~swab_site, scales="free", space="free")+
+  labs(y="Relative abundance %", title="Pseudomonas OTU 817209")+
+   theme(axis.text.x=element_text(angle=90, size=10),
+          axis.text.y=element_text(size=10),
+          strip.text = element_text(size = 8),
+          text = element_text(size=10))
+
 ```
 
 
